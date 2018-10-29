@@ -1,0 +1,150 @@
+
+HomeProgressComputersVarious ArtBuildingResearchAbout
+An Efficient Way to Draw Approximate Circles in OpenGL
+
+Introduction
+OpenGL is well known to not posses any method to rasterize non-straight curves. As such, whenever one is required to draw a curve, one has to either rasterize it himself (through GL_POINTS) which is slow, or approximate it using a number of line segments by drawing a many sided regular polygon. The latter method shall be explored here for drawing circles.
+
+It is a well known fact that a regular polygon with a large number of sides looks approximately like a circle when rasterized on the screen. As such, when given a challenge to draw a circle in OpenGL, people generally come up with something like this:
+
+void DrawCircle(float cx, float cy, float r, int num_segments) 
+{ 
+	glBegin(GL_LINE_LOOP); 
+	for(int ii = 0; ii < num_segments; ii++) 
+	{ 
+		float theta = 2.0f * 3.1415926f * float(ii) / float(num_segments);//get the current angle 
+
+		float x = r * cosf(theta);//calculate the x component 
+		float y = r * sinf(theta);//calculate the y component 
+
+		glVertex2f(x + cx, y + cy);//output vertex 
+
+	} 
+	glEnd(); 
+}
+There are some simple optimizations that one can do, but nonetheless the general algorithm is as stated. This is very bad algorithm however, since for every point we have to perform expensive calls to the trigonometric functions. I propose a method that requires only the basic arithmetic operations for every point to obtain the same result.
+
+The Algorithm
+The inspiration came to me from physics. As we know, when an object moves in a circle it does so entirely because of a constant centripetal acceleration acting on it. When this is the case the object moves at a constant radial speed. Note that that means that we have two constant length terms (radial speed and centripetal acceleration) which only change direction, but not length. Since direction is easy to compute, it is just a vector, we are in business.
+
+
+
+Here is the general motion of the point whose position we use to calculate the position of the vertices of our circle. During each calculation, we move the point tangentially to the circle for a fixed distance (segments AK and BL) and then back towards the centre of the circle for a fixed distance (segments KB and LC). At this point we store the location of our point (perhaps through a call to glVertex) and then repeat the process. Our problem, thus, is to calculate the magnitude of the tangential motion, the direction of the tangential motion, the magnitude of the radial motion and the direction of the radial motion.
+
+We are helped in this task by the following vectors that we know. At the beginning of our calculation we know the vector AO. We can easily turn this vector 90 degrees so it becomes tangent to the circle by flipping the coordinates, while negating one of them. Now, we have a vector that is tangent to the circle, but still the length of the radius. To make be the length of AK, we multiply it by a factor, which is simply the tangent of the theta. This factor is the same for every calculation, so it can be precalculated before entering the loop.
+
+Now, we add the tangential vector to the vector AO and get the vector KO. We need to get the vector BO from that. Again, we can simply multiply it by a factor which turns out to be the cosine of theta. Again, this factor is constant and can be precalculated. At this point we are back where we started, so we can just repeat this process again, and continue to do so until we fill the entire circle. Thus, here is the code for this implementation:
+
+void DrawCircle(float cx, float cy, float r, int num_segments) 
+{ 
+	float theta = 2 * 3.1415926 / float(num_segments); 
+	float tangetial_factor = tanf(theta);//calculate the tangential factor 
+
+	float radial_factor = cosf(theta);//calculate the radial factor 
+	
+	float x = r;//we start at angle = 0 
+
+	float y = 0; 
+    
+	glBegin(GL_LINE_LOOP); 
+	for(int ii = 0; ii < num_segments; ii++) 
+	{ 
+		glVertex2f(x + cx, y + cy);//output vertex 
+        
+		//calculate the tangential vector 
+		//remember, the radial vector is (x, y) 
+		//to get the tangential vector we flip those coordinates and negate one of them 
+
+		float tx = -y; 
+		float ty = x; 
+        
+		//add the tangential vector 
+
+		x += tx * tangetial_factor; 
+		y += ty * tangetial_factor; 
+        
+		//correct using the radial factor 
+
+		x *= radial_factor; 
+		y *= radial_factor; 
+	} 
+	glEnd(); 
+}
+The algorithm can be modified to draw arcs instead of circles. We first calculate the starting point from the starting angle. Then we calculate the theta parameter based not on the full circle as before, but rather the angular span of the arc. 
+Here is one way to do it:
+void DrawArc(float cx, float cy, float r, float start_angle, float arc_angle, int num_segments) 
+{ 
+	float theta = arc_angle / float(num_segments - 1);//theta is now calculated from the arc angle instead, the - 1 bit comes from the fact that the arc is open
+
+	float tangetial_factor = tanf(theta);
+
+	float radial_factor = cosf(theta);
+
+	
+	float x = r * cosf(start_angle);//we now start at the start angle
+	float y = r * sinf(start_angle); 
+    
+	glBegin(GL_LINE_STRIP);//since the arc is not a closed curve, this is a strip now
+	for(int ii = 0; ii < num_segments; ii++)
+	{ 
+		glVertex2f(x + cx, y + cy);
+
+		float tx = -y; 
+		float ty = x; 
+
+		x += tx * tangetial_factor; 
+		y += ty * tangetial_factor; 
+
+		x *= radial_factor; 
+		y *= radial_factor; 
+	} 
+	glEnd(); 
+}
+Other Considerations
+Both this and the other algorithms can be greately sped up by using a vertex array, that is then passed as an argument to the glDrawArrays, I leave it up to the reader to implement this trivial optimisation.
+
+You will note that to draw the circle you need to pass the number of segments to draw. Is it possible to create a function to give a good estimate of that number so that you get a reasonably smooth circle? Yes there is. One way to do this is to limit to the magnitude of the KB segment in the diagram above. The length of that segment is easily derived to be:
+
+(1 - cos(theta)) * r
+We set that to some small value and solve for theta. I find that setting it to 0.25 (i.e. a quarter of a pixel) generally produces acceptable results. You can vary that number as appropriate. The actual formula that you get involves inverse trigonometric functions, but I found that the following approximation matches their prediction quite well:
+
+int GetNumCircleSegments(float r) 
+{ 
+	return 10 * sqrtf(r);//change the 10 to a smaller/bigger number as needed 
+}
+Lastly, this code can be adapted to draw ellipses as well. Simply scale the x and y variables by appropriate factors, either using a matrix, or perhaps by modifying the algorithm itself. This extension is trivial.
+
+Conclusion
+This algorithm is significantly faster than any other circle approximation algorithm I have personally encountered on the web. I believe that if one chooses to draw a circle using OpenGL and using a polygonal approximation then my method is optimal. In theory, with a large number of segments the true circle, i.e. compatible with the diamond-exit specification, can be drawn, although at that point it may be preferable to rasterize the circle using GL_POINTS manually.
+
+Recasting the Algorithm as a Repeated Rotation
+Someone suggested to me that this algorithm can be recast as a simple repeated rotation. That is indeed correct. All you have to do is multiply the whole algorithm by a few trig functions, and obtain something that just looks like the repeated application of the rotation matrix. I leave it as the excersize to the reader to see how you can transform the above algorithm into this one:
+
+void DrawCircle(float cx, float cy, float r, int num_segments) 
+{ 
+	float theta = 2 * 3.1415926 / float(num_segments); 
+	float c = cosf(theta);//precalculate the sine and cosine
+	float s = sinf(theta);
+	float t;
+
+	float x = r;//we start at angle = 0 
+	float y = 0; 
+    
+	glBegin(GL_LINE_LOOP); 
+	for(int ii = 0; ii < num_segments; ii++) 
+	{ 
+		glVertex2f(x + cx, y + cy);//output vertex 
+        
+		//apply the rotation matrix
+		t = x;
+		x = c * x - s * y;
+		y = s * t + c * y;
+	} 
+	glEnd(); 
+}
+The advantages of this version of the algorithm is that it is easier to understand (repeated rotation instead of the physics inspired mumbo jumbo) and at a glance it seems to be a little more numerically stable. I use this version in my current projects, but in principle its your choice which one you like more.
+
+This code is released as public domain, but I will appreciate an email if you do use it somewhere. Feel free to email me for clarifications of the algorithm and to report bugs and whatnot.
+
+
+Original content Copyright SiegeLord's Abode 2006-2017. All rights reserved.   ♫
